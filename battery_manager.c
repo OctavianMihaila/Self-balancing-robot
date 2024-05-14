@@ -3,7 +3,7 @@
 
 void init_battery_manager() {
   // Set PB0, PB1, PB2, PB3, PB4 as outputs
-  DDRB |=  (1 << HALF_BATTERY_LED) | (1 << DISCHARGED_BATTERY_LED);
+  // DDRB |=  (1 << DISCHARGED_BATTERY_LED);
 
   // Set up the ADC for pin PC3
     // ADMUX = (1 << REFS0) | (1 << MUX0) | (1 << MUX1); // Select AVcc as reference, input channel 3 (PC3)
@@ -32,22 +32,15 @@ uint8_t collect_10_samples(uint8_t channel) {
   return adcSum / 10;
 }
 
-void display_battery_voltage(float adcValue) {
+void display_battery_voltage(float adcValue, uint8_t moving_state) {
     float readed_voltage = adcValue * (5.0 / 1023.0) * CALIBRATION;
 
     float battery_voltage = readed_voltage * (RESISTOR1 + RESISTOR2) / RESISTOR2;
 
-    // blink_green_LED_5_digit(battery_voltage); // Blink green LED for 5-digit number
+    // blink_green_LED_5_digit(battery_voltage);
 
     // Control blue LED based on voltage
-    if (battery_voltage < VOLTAGE_THRESHOLD_1) {
-        PORTB |= (1 << HALF_BATTERY_LED); // Turn on Red LED if voltage is below threshold
-    } else {
-        PORTB &= ~(1 << HALF_BATTERY_LED); // Turn off Red LED otherwise
-    }
-
-    // battery voltage less than VOLTAGETHRESHOLD2 -> TURN ON second blue LED
-    if (battery_voltage < VOLTAGE_THRESHOLD_2) {
+    if (battery_voltage < VOLTAGE_THRESHOLD_1 && moving_state) {
         PORTB |= (1 << DISCHARGED_BATTERY_LED); // Turn on Red LED if voltage is below threshold
     } else {
         PORTB &= ~(1 << DISCHARGED_BATTERY_LED); // Turn off Red LED otherwise
