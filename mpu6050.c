@@ -1,9 +1,6 @@
 #include "mpu6050.h"
 #include "debug.h"
 
-int16_t gyro_x_calib;
-int16_t gyro_y_calib;
-
 void init_mpu6050() {
     twi_start();
     twi_write(GYRO_ADDRESS << 1);
@@ -11,24 +8,16 @@ void init_mpu6050() {
     twi_write(0x00); // Activate the gyro.
     twi_stop();
 
-    // Low pass filter prevents peaks in data output.
     twi_start();
-    twi_write(0x1A); // CONFIG register.
-    twi_write(0x03); // Set the low pass filter to 44Hz in order to reduce noise.
+    twi_write(GYRO_ADDRESS << 1);
+    twi_write(0x1B); // GYRO_CONFIG register.
+    twi_write(0x08); // Set the full scale range to 500 degrees per second.
     twi_stop();
 
-    // WARNING !!!
-    // It seems that the default value of the gyro is 250 degrees per second.
-    // Since this is generating an infinite loop, i will not use it for now.
-
-    // twi_start();
-    // twi_write(0x1B); // GYRO_CONFIG register.
-    // twi_write(0x00); // Set the full scale range to 250 degrees per second.
-    // twi_stop();
-
     twi_start();
+    twi_write(GYRO_ADDRESS << 1);
     twi_write(0x1C); // ACCEL_CONFIG register.
-    twi_write(0x08); // Set the full scale range to 4g. (Accesleration will not be over +/- 4g)
+    twi_write(0x10); // Set the full scale range to 8g. (Accesleration will not be over +/- 8g)
     twi_stop();
 }
 
@@ -66,6 +55,39 @@ int16_t read_y_gyro()
     return y_gyro;
 }
 
+int16_t read_z_gyro()
+{
+    uint8_t z_gyro_high, z_gyro_low;
+    
+    get_mpu_6050_data(&z_gyro_high, 0x47);
+    get_mpu_6050_data(&z_gyro_low, 0x48);
+    int16_t z_gyro = combineBytes(z_gyro_high, z_gyro_low);
+
+    return z_gyro;
+}
+
+int16_t read_x_accel()
+{
+    uint8_t x_accel_high, x_accel_low;
+    
+    get_mpu_6050_data(&x_accel_high, 0x3B);
+    get_mpu_6050_data(&x_accel_low, 0x3C);
+    int16_t x_accel = combineBytes(x_accel_high, x_accel_low);
+
+    return x_accel;
+}
+
+int16_t read_y_accel()
+{
+    uint8_t y_accel_high, y_accel_low;
+    
+    get_mpu_6050_data(&y_accel_high, 0x3D);
+    get_mpu_6050_data(&y_accel_low, 0x3E);
+    int16_t y_accel = combineBytes(y_accel_high, y_accel_low);
+
+    return y_accel;
+}
+
 int16_t read_z_accel()
 {
     uint8_t z_accel_high, z_accel_low;
@@ -88,24 +110,18 @@ int16_t read_z_accel()
     return z_accel;
 }
 
-int16_t combineBytes(uint8_t highByte, uint8_t lowByte) {
-    // Combine the high byte (left-shifted by 8 bits) with the low byte
-    return (int16_t)((highByte << 8) | lowByte);
-}
-
-void gyro_calibration() {
-    int16_t x_gyro = 0;
-    int16_t y_gyro = 0;
-
-    // Collect 200 samples of x and y gyro data
-    for (int i = 0; i < 200; i++) {
-        x_gyro += read_x_gyro();
-        y_gyro += read_y_gyro();
-        _delay_ms(2); // Used to simulate one iteration of the while loop.
+void gyro_calibration(volatile long *gyro_x_calib, volatile long *gyro_y_calib, volatile long *gyro_z_calib) {
+    // Collect 2000 samples of x and y gyro data
+    for (int i = 0; i < 2000; i++) {
+        *gyro_x_calib += read_x_gyro();
+        *gyro_y_calib += read_y_gyro();
+        *gyro_z_calib += read_z_gyro();
+        _delay_us(3); // Used to simulate one iteration of the while loop.
     }
 
-    gyro_x_calib = x_gyro / 200;
-    gyro_y_calib = y_gyro / 200;
+    *gyro_x_calib /= 2000;
+    *gyro_y_calib /= 2000;
+    *gyro_z_calib /= 2000;
 
     // Blink blue led 3 times to mark the end of calibration
     for (int i = 0; i < 3; i++) {
@@ -117,24 +133,17 @@ void gyro_calibration() {
 
 }
 
-// TOOD: Should be called in the main loop.
-float calculate_acc_angle(int16_t z_accel) {
-    // Calculate the angle of the robot based on the z-acceleration.
-    // The angle is calculated in degrees.
-    float degree_conversion_factor = HALF_CIRCLE / PI;
-
-    return asin((float)z_accel / LSB_SENSITIVITY_4G) * degree_conversion_factor;
+int16_t combineBytes(uint8_t highByte, uint8_t lowByte) {
+    // Combine the high byte (left-shifted by 8 bits) with the low byte
+    return (int16_t)((highByte << 8) | lowByte);
 }
 
-// TODO: Should be called in the main loop.
-float adjust_gyro_angle(uint16_t old_gyro_angle, int16_t gyro_y) {
-    gyro_y -= gyro_y_calib;
-    //  blink_green_LED_5_digit(gyro_y);
-    float loop_duration = LOOP_DURATION;
-    float fs_sel_0_typ = FS_SEL_0_TYP;
+float calculate_travelled_angle() {
+    float division_factor = (ONE_ROT_TIME_COMPLETION * ACCEL_Z_OFFSET) / REFRESH_RATE;
 
-    float gyro_movement_factor = 1 / (1 / loop_duration * fs_sel_0_typ);
-
-    return old_gyro_angle + gyro_y * gyro_movement_factor;
+    return (1 / REFRESH_RATE) / division_factor;
 }
 
+float calculate_degrees_to_radians_coeff() {
+    return 1 / (PI / HALF_CIRCLE);
+}

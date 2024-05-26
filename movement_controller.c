@@ -1,8 +1,6 @@
 #include "movement_controller.h"
 
-volatile float prev_pid_error = 0;
-
-float calculate_pid_result(float gyro_angle) {
+float calculate_pid_result(float gyro_angle, float prev_pid_error) {
   float curr_pid_error = gyro_angle;
   float pid_result = PID_KP * curr_pid_error + PID_KI * (curr_pid_error + prev_pid_error) + PID_KD * (curr_pid_error - prev_pid_error);
 

@@ -45,12 +45,12 @@ void blink_green_LED(float adcValue) {
 
 void blink_led_once(uint8_t pin) { // only for B port !
   PORTB |= (1 << pin); // Turn on Green LED
-  _delay_ms(200); // 1 second interval
+  _delay_ms(500); // 1 second interval
   PORTB &= ~(1 << pin); // Turn off Green LED
-  _delay_ms(200); // 1 second interval
+  _delay_ms(500); // 1 second interval
 }
 
-void blink_green_LED_5_digit(float value) {
+void blink_green_LED_5_digit(int value) {
   if (value < 0) {
     // turn white led on
     PORTB |= (1 << EXTERN_WHITE_LED);
@@ -109,5 +109,4 @@ void display_gyro_angle_samples() {
     _delay_ms(4000);
   }
 }
-
 

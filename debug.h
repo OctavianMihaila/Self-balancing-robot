@@ -1,5 +1,7 @@
 #include <avr/io.h>
 #include <util/delay.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define GREEN_LED_PIN PB0
 #define BLUE_LED_PIN PB1
@@ -15,6 +17,6 @@
 void init_debug_voltage_LEDs();
 void blink_green_LED(float voltage);
 void blink_led_once(uint8_t pin);
-void blink_green_LED_5_digit(float adcValue);
+void blink_green_LED_5_digit(int adcValue);
 void collect_gyro_angle_samples(float gyro_angle);
 void display_gyro_angle_samples();

@@ -10,24 +10,73 @@
 #define RELAY_PIN PB3
 #define POWER_SUPPLY_PIN PD3
 
+#define FINAL_ANGLE_OFFSET 71
+#define DRIFT_GYRO_CORRECTION 0.9996
+#define DRIFT_ACC_CORRECTION 0.0004
+#define FILTER_PREVIOUS_ANGLE_WEIGHT 0.9
+#define FILTER_NEW_ANGLE_WEIGHT 0.1
+
 volatile uint8_t adcValue = 0;
-volatile int8_t is_moving = -1;
-volatile float pid_result = 0;
 volatile int battery_intterupt_counter = 0;
-volatile uint8_t moving_state = 0;
+volatile int last_interrupt_time = 0;
+const unsigned long debounce_delay = 2000; // in milliseconds
+volatile unsigned long millis_count = 0;
+int started = 0;
 
-// DEBUG VARS:
-int count_iter = 0;
+volatile long gyro_x_calib;
+volatile long gyro_y_calib;
+volatile long gyro_z_calib;
+volatile float angle_y = 0;
+volatile float angle_y_result = 0;
+volatile float angle_y_acc = 0;
+volatile long magnitude = 0;
 
-// Timer0 is responsible for generating interrupts every 25 ms
+volatile float pid_result = 0;
+volatile float prev_pid_error = 0;
+
+ISR(TIMER2_COMPA_vect) {
+    millis_count++;
+}
+
+void timer2_init() {
+    // Set the Timer Mode to CTC (Clear Timer on Compare Match)
+    TCCR2A |= (1 << WGM21);
+    
+    OCR2A = 249;  // Assuming a prescaler of 64 for 1ms interval
+    
+    // Set the prescaler to 64 and start the timer
+    TCCR2B |= (1 << CS22);
+    
+    // Enable Output Compare Match A Interrupt
+    TIMSK2 |= (1 << OCIE2A);
+    
+    // Initialize Counter
+    TCNT2 = 0;
+    
+    // Enable global interrupts
+    sei();
+}
+
+unsigned long millis() {
+    unsigned long millis_return;
+    
+    // Ensure this cannot be disrupted.
+    cli();
+    millis_return = millis_count;
+    sei();
+    
+    return millis_return;
+}
+
+// Timer0 is responsible for generating interrupts every 20 us
 // that are used in order to mentain the robot in equilibrium.
 void timer0_init() {
   // Set Timer/Counter0 to CTC (Clear Timer on Compare Match) mode
   TCCR0A |= (1 << WGM01);
   // Set prescaler to 1024.
   TCCR0B |= (1 << CS02) | (1 << CS00);
-  // Set compare match value for 25 us interrupt at 16MHz CPU clock and 1024 prescaler
-  OCR0A = 64;
+  // Set compare match value for 20 us interrupt at 16MHz CPU clock and 1024 prescaler
+  OCR0A = 39;
   // Enable Timer/Counter0 compare match interrupt
   TIMSK0 |= (1 << OCIE0A);
 }
@@ -50,15 +99,11 @@ ISR(TIMER0_COMPA_vect) {
   }
 }
 
-// Timer interrupt service routine
 ISR(TIMER1_COMPA_vect) {
-
-
-
   if (battery_intterupt_counter % 10 == 0) {
     adcValue = collect_10_samples(PC3);
     
-    display_battery_voltage(adcValue, moving_state);
+    display_battery_voltage(adcValue);
   }
 
   battery_intterupt_counter++;
@@ -66,30 +111,33 @@ ISR(TIMER1_COMPA_vect) {
 
 // External interrupt service routine for power button press.
 ISR(INT1_vect) {
-  _delay_ms(100); // Debounce the button press
-
+  int current_time = millis();
+  
   // turn blue led on
-  // PORTB ^= (1 << BLUE_LED_PIN);
+  PORTB |= (1 << BLUE_LED_PIN);
 
-  if (!(PIND & (1 << POWER_SUPPLY_PIN))) {
-    // Turn off the power supply
-    PORTB ^= (1 << RELAY_PIN);
+  // Check if the required debounce delay has passed
+  if ((current_time - last_interrupt_time) > debounce_delay) {
+    // Update the last interrupt time
+    last_interrupt_time = current_time;
+    
+    // Check if the power supply button is pressed
+    if (!(PIND & (1 << POWER_SUPPLY_PIN))) {
+      // Turn the power supply on. This can be change to toggle and the button will
+      // be used as a turn on/off button. But something strange happens due to the
+      // fact that the button is located around the wire that is connected to the
+      // extern interrupt pin and due to electromagnetic interference the interrupt triggers.
+      PORTB |= (1 << RELAY_PIN);
 
-    if (is_moving == -1) {
-      is_moving = 0;
-    } else {
-      is_moving = !is_moving;
-    }
-
-    // wait for the button to be released
-    while (!(PIND & (1 << POWER_SUPPLY_PIN))) {
-      _delay_ms(10);
+      // Wait for the button to be released
+      while (!(PIND & (1 << POWER_SUPPLY_PIN))) {
+        _delay_ms(10);
+      }
     }
   }
 }
 
 void init_external_interrupt_PD3() {
-  // I want the interrupt to trigger when i press the power button. Only once per press
   EICRA |= (1 << ISC11); // Falling edge of INT1 generates an interrupt request
   EIMSK |= (1 << INT1); // Enable INT1
 }
@@ -111,72 +159,64 @@ int main() {
   init_external_interrupt_PD3();
   init_power_supply_pins();
   init_dir_and_step_pins();
+  timer2_init();
   timer1_init();
   timer0_init();
   twi_init();
   init_mpu6050();
-  gyro_calibration();
+  gyro_calibration(&gyro_x_calib, &gyro_y_calib, &gyro_z_calib);
+
+  // The angle that the MPU6050 has traveled during a loop iteration
+  float travel_angle = calculate_travelled_angle();
+  // This is used because arduino asin function is working with radians.
+  float degrees_to_radians_coeff = calculate_degrees_to_radians_coeff();
 
   while (1) {
+    long acc_x = read_x_accel();
+    long acc_y = read_y_accel();
+    long acc_z = read_z_accel();
+    int16_t gyro_x = read_x_gyro();
 
-    // stop_motors(STEP_PIN_LEFT, STEP_PIN_RIGHT);
-    // _delay_ms(5000);
-    // rotate_acw(DIR_PIN_LEFT, STEP_PIN_LEFT, DIR_PIN_RIGHT, STEP_PIN_RIGHT, 2000);
+    gyro_x -= gyro_x_calib;
+    
+    // Add the traveled angle since the last loop iteration.
+    angle_y += gyro_x * travel_angle;
+    
+    // Overall acceleration experienced by the robot (euclidian norm).
+    magnitude = sqrt((acc_x*acc_x)+(acc_y*acc_y)+(acc_z*acc_z));
 
-    // rotate_cw(DIR_PIN_LEFT, STEP_PIN_LEFT, DIR_PIN_RIGHT, STEP_PIN_RIGHT, 2000);
+    // Adjust the angle of the robot based on the acceleration.
+    angle_y_acc = asin((float)acc_y/magnitude)* degrees_to_radians_coeff;
+    
+    // Gyro drift correction.
+    if(started) {
+      angle_y = angle_y * DRIFT_GYRO_CORRECTION + angle_y_acc * DRIFT_ACC_CORRECTION;
+    }
+    else{ // When starting, set the gyro angle to the accelerometer angle.
+      angle_y = angle_y_acc;
+      started = 1;
+    }
+    
+    // Using this complementary filter to reduse vibrations.
+    // If not used it will go too fast and overshoot.
+    angle_y_result = angle_y_result * FILTER_PREVIOUS_ANGLE_WEIGHT + angle_y * FILTER_NEW_ANGLE_WEIGHT;
 
+    // The angle that the robot percepts as being the equilibrium point.
+    float reference_angle_value = angle_y_result - FINAL_ANGLE_OFFSET;
 
-    // _delay_ms(5000);
-
-    // --------------  PID IMPLMENTATION ----------------
-    float acc_angle = calculate_acc_angle(read_z_accel());
-    float gyro_angle;
-
-    if (is_moving == -1 && acc_angle > -2 && acc_angle < 2) {
-      gyro_angle = acc_angle;
-      is_moving = 1;
-      // TODO: Turn some LED ON. Probably the one that is used for calibration as well. BLUE
-      // PORTB ^= (1 << BLUE_LED_PIN);
-      // turn on yellow led
-      PORTB ^= (1 << EXTERN_YELLOW_LED);
+    // Used in order to easily find the equilibrium point.
+    if (reference_angle_value < 0.5 && reference_angle_value > -0.5) {
+      PORTB |= (1 << GREEN_LED_PIN);
+    } else {
+      PORTB &= ~(1 << GREEN_LED_PIN);
     }
 
+    pid_result = calculate_pid_result(reference_angle_value, prev_pid_error);
 
-
-    float gyro_y =  read_y_gyro();
-    gyro_angle = adjust_gyro_angle(gyro_angle, gyro_y);
-
-
-    // TODO: DRIFT correction may be needed if the robot loses balance after a while.
-
-       pid_result = calculate_pid_result(acc_angle);
-    // pid_result = calculate_pid_result(gyro_angle);
-    // blink_green_LED_5_digit(pid_result);
-
-    // Skip one iteration if the robot is straight. Prevents lose of balance when almost straight.
-    if (pid_result < 10 && pid_result > -10) {
+    // If the robot is in equilibrium we don't do any movements.
+    if (pid_result < 5 && pid_result > -5) {
       pid_result = 0;
     }
-
-    // // Stop the engines if the robot falls.
-    // if ((gyro_angle < -45 || gyro_angle > 45) && is_moving) {
-    //   // cut the power supply as well
-    //   PORTB &= ~(1 << RELAY_PIN);
-    //   // toggle blue led
-    //   PORTB ^= (1 << BLUE_LED_PIN);
-    //   is_moving = 0;
-
-    // }
-
-    // // wait for reset in a while loop 
-    // while (!is_moving) {
-    //   continue;
-
-    //   // toggle white led
-    //   PORTB ^= (1 << EXTERN_WHITE_LED);
-    //   _delay_ms(1000);
-
-    // }
   }
 
   return 0;
