@@ -34,7 +34,7 @@ This project involves developing a self-balancing robot that maintains its verti
 
 The PID algorithm processes the composite angle:
 
-\[ \text{pid\_result} = \text{PID\_KP} \times \text{curr\_pid\_error} + \text{PID\_KI} \times (\text{curr\_pid\_error} + \text{prev\_pid\_error}) + \text{PID\_KD} \times (\text{curr\_pid\_error} - \text{prev\_pid\_error}) \]
+- pid_result = PID_KP * curr_pid_error + PID_KI * (curr_pid_error + prev_pid_error) + PID_KD * (curr_pid_error - prev_pid_error)
 
 - Output is limited to ±MAX_PID_RESULT.
 - PID constants tuning:
