@@ -10,6 +10,11 @@ This project involves developing a self-balancing robot that maintains its verti
   
 </div>
 
+### Video
+
+![Click to play video](https://www.youtube.com/watch?v=EH0yqp-uJCQ)
+
+
 ## Hardware Design
 
 - Two stepper motors are controlled by A4988 drivers using microstepping.
